@@ -79,8 +79,18 @@ EOS
             force=true
             ;;
 
+        \?)
+            echo "Try -h, for help" 1>&2
+            exit 1
+            ;;
+
     esac
 done
+if [ $# -gt $(( $OPTIND - 1 )) ]; then
+    echo "Unexpected arguments" 1>&2
+    echo "Try -h, for help" 1>&2
+    exit 1
+fi
 
 # Should we be quiet?
 isquiet () {
