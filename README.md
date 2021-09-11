@@ -75,4 +75,5 @@ Total reclaimed space: 1.047GB
 ## License
 
 Copyright (c) 2021 Johannes Lehtinen
+
 Licensed under the MIT License, see "LICENSE"
