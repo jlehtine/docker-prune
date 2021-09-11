@@ -1,0 +1,232 @@
+#! /bin/sh
+
+# Copyright (c) 2021 Johannes Lehtinen
+# Licensed under the MIT License, see "LICENSE"
+
+# See "./docker-prune -h" for help
+
+
+# Stop on error
+set -e
+
+# Container filters selecting the stopped containers
+containerfilterstopped='-f status=created -f status=exited -f status=dead'
+
+# Check for options
+stopped=false
+all=false
+tagged=false
+quiet=false
+force=false
+while getopts hsateqf opt; do
+    case "$opt" in
+
+        h)
+            cat << EOS
+Removes unused Docker resources. By default removes only the dandling images.
+
+To remove the stopped containers and their volumes as well as unused volumes
+and networks use "-s" (stopped). To stop the running containers and then remove
+resources associated with all containers, use "-a" (all).
+
+To remove all unused images including tagged ones, use "-t" (tagged).
+
+To remove everything, use "-e" (everything), implying -a -t.
+
+See other options below.
+
+usage: $(basename "$0") [-a] [-t] [-q] [-f]
+       $(basename "$0") [-s] [-t] [-q] [-f]
+       $(basename "$0") [-e] [-q] [-f]
+       $(basename "$0") -h
+
+options:
+    -h    print this help text and exit without doing anything else
+    -s    remove resources associated with the stopped containers
+    -a    remove resources associated with all containers
+    -t    remove tagged images that are not used by any containers
+    -e    remove everything
+    -q    be quiet, suppress informative output
+    -f    force it, omit all confirmation dialogs
+EOS
+            exit 0
+            ;;
+
+        s)
+            stopped=true
+            ;;
+
+        a)
+            stopped=true
+            all=true
+            ;;
+
+        t)
+            tagged=true
+            ;;
+
+        e)
+            stopped=true
+            all=true
+            tagged=true
+            ;;
+
+        q)
+            quiet=true
+            ;;
+
+        f)
+            force=true
+            ;;
+
+    esac
+done
+
+# Should we be quiet?
+isquiet () {
+    [ "$quiet" = true ]
+}
+
+# Are we forced?
+isforce () {
+    [ "$force" = true ]
+}
+
+# Print information
+echoinfo () {
+    if ! isquiet; then
+        echo "$@"
+    fi
+}
+
+# On failure
+fail () {
+    echo "Failed!"
+    exit 1
+}
+
+# Ask confirmation before proceeding
+confirm () {
+    if ! isforce; then
+        if [ -t 0 ]; then
+            read -p "$@ (y/N): " resp
+            case "$resp" in
+                y|Y)
+                    echo ''
+                    return 0
+                    ;;
+            esac
+        fi
+        echo 'Aborting, use -f to force without confirmation' 1>&2
+        exit 1
+    fi
+}
+
+# Returns an element count
+count () {
+    local allflag filterflag format
+    allflag=
+    filterflag=
+    format='{{.ID}}'
+    if [ "$1" = container -o "$1" = image ]; then
+        allflag='-a'
+    fi
+    if [ "$1" = container ]; then
+        filterflag="$containerfilterstopped"
+    fi
+    if [ "$1" = volume ]; then
+        format='{{.Name}}'
+    fi
+    docker "$1" ls $allflag $filterflag --format "$format" | wc -l
+}
+
+# Takes an element count before pruning
+countbefore () {
+    isquiet || eval "${1}countbefore=\"\$(count "$1")\""
+}
+
+# Shows the number of removed elements, if any
+countafter () {
+    local countbefore countafter
+    if ! isquiet; then
+        eval countbefore="\$${1}countbefore"
+        countafter="$(count "$1")" 
+        if [ $countafter -lt $countbefore ]; then
+            echoinfo "Removed $(( $countbefore - $countafter )) unused ${1}s"
+        fi
+    fi
+}
+
+# Prunes specific element
+prune () {
+    local allflag output
+    echoinfo "Removing unused ${1}s..."
+    countbefore "$1"
+    allflag=
+    if [ "$1" = image -a "$tagged" = true ]; then
+        allflag='-a'
+    fi
+    output="$(LANG=C docker "$1" prune $allflag -f < /dev/null | grep -E '^Total reclaimed space: ' | ( grep -v -F 'Total reclaimed space: 0B' || true ) )" || fail
+    countafter "$1"
+    [ -z "$output" ] || echoinfo "$output"
+    echoinfo ''
+}
+
+# Ask for confirmation first, if not forced and removing essential elements
+if ! isforce && [ "$all" = true -o "$stopped" = true -o "$tagged" = true ]; then
+    if ! isquiet; then
+        if [ "$all" = true ]; then
+            echo 'Will stop the running containers:'
+            docker container ls --format '- {{.Names}}'
+            echo ''
+            echo 'Will remove all containers:'
+            docker container ls -a --format '- {{.Names}}'
+            echo ''
+            echo 'Will remove all volumes:'
+            docker volume ls --format '- {{.Name}}'
+            echo ''
+        elif [ "$stopped" = true ]; then
+            echo 'Will remove the stopped containers:'
+            docker container ls -a $containerfilterstopped --format '- {{.Names}}'
+            echo ''
+            echo 'Will remove their volumes and any unused volumes'
+            echo ''
+        fi
+        if [ "$tagged" = true ]; then
+            if [ "$all" = true ]; then
+                echo 'Will remove all images'
+            else
+                echo 'Will remove tagged images not used by any container'
+            fi
+            echo ''
+        fi
+    fi
+    confirm 'Are you sure you want to proceed?'
+fi
+
+# First stop any running containers, if removing all containers
+if [ "$all" = true ]; then
+    running="$(docker container ls --format '{{.ID}}')" || fail
+    if [ -n "$running" ]; then 
+        echoinfo 'Stopping the running containers...'
+        docker stop $running < /dev/null > /dev/null
+        echoinfo ''
+    fi
+fi
+
+# Remove unused container resources, if so requested
+if [ "$stopped" = true ]; then
+
+    # Remove stopped containers
+    prune container
+
+    # Remove unused networks
+    prune network
+
+    # Remove unused volumes
+    prune volume
+
+fi
+
+# Remove unused images
+prune image
