@@ -16,26 +16,30 @@ Let the tool speak for itself...
 $ ./docker-prune -h
 Removes unused Docker resources. By default removes only the dandling images.
 
-To remove the stopped containers and their volumes as well as unused volumes
-and networks use "-s" (stopped). To stop the running containers and then remove
-resources associated with all containers, use "-a" (all).
+To remove the stopped containers based on untagged images (typically left
+behind by failed builds) and their anonymous volumes, use "-u" (untagged). To
+remove all stopped containers and their volumes as well as unused volumes and
+networks use "-s" (stopped).  To stop the running containers and then remove
+resources associated with all containers, use "-r" (running).
 
-To remove all unused images including tagged ones, use "-t" (tagged).
+To remove all unused images including tagged ones, use "-a" (all).
 
-To remove everything, use "-e" (everything), implying -a -t.
+To remove everything, use "-e" (everything), implying -r -a.
 
 See other options below.
 
-usage: docker-prune [-a] [-t] [-q] [-f]
-       docker-prune [-s] [-t] [-q] [-f]
+usage: docker-prune [-u] [-a] [-q] [-f]
+       docker-prune [-s] [-a] [-q] [-f]
+       docker-prune [-r] [-a] [-q] [-f]
        docker-prune [-e] [-q] [-f]
        docker-prune -h
 
 options:
     -h    print this help text and exit without doing anything else
+    -u    remove containers based on untagged images (by failed builds)
     -s    remove resources associated with the stopped containers
-    -a    remove resources associated with all containers
-    -t    remove tagged images that are not used by any containers
+    -r    remove resources associated with all containers
+    -a    remove all unused images, including tagged ones
     -e    remove everything
     -q    be quiet, suppress informative output
     -f    force it, omit all confirmation dialogs
@@ -44,7 +48,7 @@ options:
 ## Example
 
 ```
-$ ./docker-prune -s -t
+$ ./docker-prune -s -a
 Will remove the stopped containers:
 - container2
 - ubuntuexperiment

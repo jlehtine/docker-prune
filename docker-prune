@@ -13,38 +13,43 @@ set -e
 containerfilterstopped='-f status=created -f status=exited -f status=dead'
 
 # Check for options
+untagged=false
 stopped=false
-all=false
+running=false
 tagged=false
 quiet=false
 force=false
-while getopts hsateqf opt; do
+while getopts husraeqf opt; do
     case "$opt" in
 
         h)
             cat << EOS
 Removes unused Docker resources. By default removes only the dandling images.
 
-To remove the stopped containers and their volumes as well as unused volumes
-and networks use "-s" (stopped). To stop the running containers and then remove
-resources associated with all containers, use "-a" (all).
+To remove the stopped containers based on untagged images (typically left
+behind by failed builds) and their anonymous volumes, use "-u" (untagged). To
+remove all stopped containers and their volumes as well as unused volumes and
+networks use "-s" (stopped).  To stop the running containers and then remove
+resources associated with all containers, use "-r" (running).
 
-To remove all unused images including tagged ones, use "-t" (tagged).
+To remove all unused images including tagged ones, use "-a" (all).
 
-To remove everything, use "-e" (everything), implying -a -t.
+To remove everything, use "-e" (everything), implying -r -a.
 
 See other options below.
 
-usage: $(basename "$0") [-a] [-t] [-q] [-f]
-       $(basename "$0") [-s] [-t] [-q] [-f]
+usage: $(basename "$0") [-u] [-a] [-q] [-f]
+       $(basename "$0") [-s] [-a] [-q] [-f]
+       $(basename "$0") [-r] [-a] [-q] [-f]
        $(basename "$0") [-e] [-q] [-f]
        $(basename "$0") -h
 
 options:
     -h    print this help text and exit without doing anything else
+    -u    remove containers based on untagged images (by failed builds)
     -s    remove resources associated with the stopped containers
-    -a    remove resources associated with all containers
-    -t    remove tagged images that are not used by any containers
+    -r    remove resources associated with all containers
+    -a    remove all unused images, including tagged ones
     -e    remove everything
     -q    be quiet, suppress informative output
     -f    force it, omit all confirmation dialogs
@@ -52,22 +57,26 @@ EOS
             exit 0
             ;;
 
+        u)
+            untagged=true
+            ;;
+
         s)
             stopped=true
             ;;
 
-        a)
+        r)
             stopped=true
-            all=true
+            running=true
             ;;
 
-        t)
+        a)
             tagged=true
             ;;
 
         e)
             stopped=true
-            all=true
+            running=true
             tagged=true
             ;;
 
@@ -182,10 +191,22 @@ prune () {
     echoinfo ''
 }
 
+prune_container_untagged_image () {
+    local untaggedids
+    echoinfo 'Removing stopped containers based on untagged images...'
+    countbefore container
+    untaggedids="$(docker container ls -a $containerfilterstopped --format '{{.Image}};{{.ID}}' --no-trunc | grep -E '^sha256:' | sed -e 's/^[^;]*;//')" || fail
+    if [ -n "$untaggedids" ]; then
+        docker container rm -v $untaggedids > /dev/null
+    fi
+    countafter container
+    echoinfo ''
+}
+
 # Ask for confirmation first, if not forced and removing essential elements
-if ! isforce && [ "$all" = true -o "$stopped" = true -o "$tagged" = true ]; then
+if ! isforce && [ "$running" = true -o "$stopped" = true -o "$untagged" = true -o "$tagged" = true ]; then
     if ! isquiet; then
-        if [ "$all" = true ]; then
+        if [ "$running" = true ]; then
             echo 'Will stop the running containers:'
             docker container ls --format '- {{.Names}}'
             echo ''
@@ -201,9 +222,15 @@ if ! isforce && [ "$all" = true -o "$stopped" = true -o "$tagged" = true ]; then
             echo ''
             echo 'Will remove their volumes and any unused volumes'
             echo ''
+        elif [ "$untagged" = true ]; then
+            echo 'Will remove the stopped containers based on untagged images:'
+            docker container ls -a $containerfilterstopped --format '{{.Image}};{{.Names}}' --no-trunc | grep -E '^sha256:' | sed -e 's/^[^;]*;/- /'
+            echo ''
+            echo 'Will remove their anonymous volumes'
+            echo ''
         fi
         if [ "$tagged" = true ]; then
-            if [ "$all" = true ]; then
+            if [ "$running" = true ]; then
                 echo 'Will remove all images'
             else
                 echo 'Will remove tagged images not used by any container'
@@ -215,13 +242,20 @@ if ! isforce && [ "$all" = true -o "$stopped" = true -o "$tagged" = true ]; then
 fi
 
 # First stop any running containers, if removing all containers
-if [ "$all" = true ]; then
-    running="$(docker container ls --format '{{.ID}}')" || fail
-    if [ -n "$running" ]; then 
+if [ "$running" = true ]; then
+    runningids="$(docker container ls --format '{{.ID}}')" || fail
+    if [ -n "$runningids" ]; then 
         echoinfo 'Stopping the running containers...'
-        docker stop $running < /dev/null > /dev/null
+        docker stop $runningids < /dev/null > /dev/null
         echoinfo ''
     fi
+fi
+
+# Remove stopped containers based on untagged images, if so requested
+if [ "$untagged" = true -a "$stopped" = false ]; then
+
+    # Remove stopped containers based on untagged imags
+    prune_container_untagged_image
 fi
 
 # Remove unused container resources, if so requested
